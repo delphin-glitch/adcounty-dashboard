@@ -1,0 +1,205 @@
+// ============================================================
+// COMPLETE Code.gs — Replace ALL existing code with this
+// Step 1: Run createAllSalespersonSheets()
+// Step 2: Run setupTrigger()
+// Step 3: Deploy as Web App → paste URL in dashboard
+// ============================================================
+
+var SALESPEOPLE = [
+  "Vignesh M", "Vikhram R", "Shivam R", "Kartik S", "Deepika R",
+  "Nitish R", "Rakesh B", "Priyanka M", "Shikha G", "Shriya C",
+  "Phik MW", "Federico M", "Vanda F"
+];
+
+var COLUMNS = [
+  "Client Name", "Client Type (Direct/Agency)", "Genre",
+  "Campaign Type", "Platform", "Sub-Type / Product",
+  "Status", "Expected RO (₹)", "Actual RO (₹)",
+  "Closure Date (YYYY-MM-DD)", "Next Follow-up (YYYY-MM-DD)",
+  "POC Name", "Country", "Remarks"
+];
+
+var VALIDATIONS = {
+  "Client Type (Direct/Agency)": ["Direct", "Agency"],
+  "Genre": ["BFSI","FMCG","EdTech","E-commerce","Healthcare","Auto","Real Estate","Travel","Food Tech","IT","Gaming","Other"],
+  "Campaign Type": ["Branding","Mobile Performance","Web Performance","GEO","Apple Search Ads"],
+  "Platform": ["Seorce","iSearch","Opsis Pro","Adaxx Pro","Muslim Pro Inventory","Other"],
+  "Country": ["India","UAE","USA","UK","Singapore","Saudi Arabia","Australia","Canada","Germany","France","Netherlands","Japan","South Korea","Malaysia","Indonesia","Philippines","Thailand","Bangladesh","Pakistan","Sri Lanka","Qatar","Kuwait","Bahrain","Oman","South Africa","Nigeria","Kenya","New Zealand","Other"],
+};
+
+// ── CREATE ALL SHEETS ──────────────────────────────────────
+function createAllSalespersonSheets() {
+  var props = PropertiesService.getScriptProperties();
+  var sheetIds = {};
+
+  for (var i = 0; i < SALESPEOPLE.length; i++) {
+    var name = SALESPEOPLE[i];
+    var ss = SpreadsheetApp.create("AdCounty Sales – " + name);
+    var sheet = ss.getActiveSheet();
+    sheet.setName("Deals");
+
+    sheet.appendRow(COLUMNS);
+    var headerRange = sheet.getRange(1, 1, 1, COLUMNS.length);
+    headerRange.setFontWeight("bold");
+    headerRange.setBackground("#1a3a5c");
+    headerRange.setFontColor("#ffffff");
+    sheet.setFrozenRows(1);
+
+    sheet.setColumnWidth(1, 200);
+    sheet.setColumnWidth(12, 150);
+    sheet.setColumnWidth(13, 220);
+
+    for (var col = 1; col <= COLUMNS.length; col++) {
+      var colName = COLUMNS[col - 1];
+      if (VALIDATIONS[colName]) {
+        var rule = SpreadsheetApp.newDataValidation()
+          .requireValueInList(VALIDATIONS[colName], true)
+          .setAllowInvalid(false)
+          .build();
+        sheet.getRange(2, col, 500, 1).setDataValidation(rule);
+      }
+    }
+
+    sheet.getRange(2, 8, 500, 2).setNumberFormat("₹#,##0");
+    sheet.getRange(2, 10, 500, 2).setNumberFormat("yyyy-mm-dd");
+
+    var file = DriveApp.getFileById(ss.getId());
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+    sheetIds[name] = ss.getId();
+    Logger.log("Created: " + name + " → https://docs.google.com/spreadsheets/d/" + ss.getId());
+  }
+
+  // Create Master Sheet
+  var master = SpreadsheetApp.create("AdCounty Sales – MASTER DASHBOARD");
+  var masterSheet = master.getActiveSheet();
+  masterSheet.setName("All Deals");
+
+  var masterHeader = ["Salesperson"];
+  for (var c = 0; c < COLUMNS.length; c++) {
+    masterHeader.push(COLUMNS[c]);
+  }
+  masterHeader.push("Last Updated");
+  masterSheet.appendRow(masterHeader);
+
+  var mhRange = masterSheet.getRange(1, 1, 1, masterHeader.length);
+  mhRange.setFontWeight("bold");
+  mhRange.setBackground("#1a3a5c");
+  mhRange.setFontColor("#ffffff");
+  masterSheet.setFrozenRows(1);
+
+  var masterFile = DriveApp.getFileById(master.getId());
+  masterFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  sheetIds["__MASTER__"] = master.getId();
+  Logger.log("Master Sheet → https://docs.google.com/spreadsheets/d/" + master.getId());
+
+  props.setProperty("SHEET_IDS", JSON.stringify(sheetIds));
+  Logger.log("All done! Copy the Master Sheet ID into the dashboard.");
+}
+
+// ── AGGREGATOR ─────────────────────────────────────────────
+function aggregateMaster() {
+  var props = PropertiesService.getScriptProperties();
+  var sheetIds = JSON.parse(props.getProperty("SHEET_IDS") || "{}");
+  var masterId = sheetIds["__MASTER__"];
+
+  if (!masterId) {
+    Logger.log("No master sheet found. Run createAllSalespersonSheets first.");
+    return;
+  }
+
+  var master = SpreadsheetApp.openById(masterId).getSheetByName("All Deals");
+  var lastRow = master.getLastRow();
+  if (lastRow > 1) {
+    master.getRange(2, 1, lastRow - 1, COLUMNS.length + 2).clearContent();
+  }
+
+  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+  var allRows = [];
+
+  for (var i = 0; i < SALESPEOPLE.length; i++) {
+    var name = SALESPEOPLE[i];
+    var id = sheetIds[name];
+    if (!id) continue;
+    try {
+      var ss = SpreadsheetApp.openById(id);
+      var sheet = ss.getSheetByName("Deals");
+      var data = sheet.getDataRange().getValues();
+      for (var r = 1; r < data.length; r++) {
+        var row = data[r];
+        if (!row[0]) continue;
+        var newRow = [name];
+        for (var col = 0; col < row.length; col++) {
+          newRow.push(row[col]);
+        }
+        newRow.push(now);
+        allRows.push(newRow);
+      }
+    } catch (e) {
+      Logger.log("Error reading " + name + ": " + e);
+    }
+  }
+
+  if (allRows.length > 0) {
+    master.getRange(2, 1, allRows.length, COLUMNS.length + 2).setValues(allRows);
+  }
+  Logger.log("Master updated at " + now + " — " + allRows.length + " rows aggregated.");
+}
+
+// ── AUTO TRIGGER ───────────────────────────────────────────
+function setupTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger("aggregateMaster")
+    .timeBased()
+    .everyMinutes(3)
+    .create();
+  Logger.log("Trigger set: aggregateMaster runs every 3 minutes.");
+}
+
+// ── WEB APP API ────────────────────────────────────────────
+function doGet(e) {
+  var props = PropertiesService.getScriptProperties();
+  var sheetIds = JSON.parse(props.getProperty("SHEET_IDS") || "{}");
+  var masterId = sheetIds["__MASTER__"];
+  var allRows = [];
+
+  try {
+    if (masterId) {
+      var master = SpreadsheetApp.openById(masterId).getSheetByName("All Deals");
+      var data = master.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        var r = data[i];
+        if (!r[1]) continue;
+        allRows.push({
+          sp:       String(r[0] || ""),
+          name:     String(r[1] || ""),
+          type:     String(r[2] || ""),
+          genre:    String(r[3] || ""),
+          ctype:    String(r[4] || ""),
+          platform: String(r[5] || ""),
+          sub:      String(r[6] || ""),
+          status:   String(r[7] || ""),
+          expRO:    parseFloat(String(r[8] || "0").replace(/[^0-9.]/g, "")) || 0,
+          actualRO: parseFloat(String(r[9] || "0").replace(/[^0-9.]/g, "")) || 0,
+          closure:  String(r[10] || ""),
+          nextFU:   String(r[11] || ""),
+          poc:      String(r[12] || ""),
+          country:  String(r[13] || ""),
+          remarks:  String(r[14] || "")
+        });
+      }
+    }
+  } catch(err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({error: err.toString(), rows: []}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({rows: allRows, count: allRows.length}))
+    .setMimeType(ContentService.MimeType.JSON);
+}
